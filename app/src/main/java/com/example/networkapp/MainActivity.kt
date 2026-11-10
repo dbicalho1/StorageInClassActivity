@@ -2,26 +2,23 @@ package com.example.networkapp
 
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
-import com.android.volley.Request
 import com.android.volley.RequestQueue
 import com.android.volley.toolbox.JsonObjectRequest
-import com.android.volley.toolbox.StringRequest
 import com.android.volley.toolbox.Volley
 import com.squareup.picasso.Picasso
 import org.json.JSONObject
-
-// TODO (1: Fix any bugs)
-// TODO (2: Add function saveComic(...) to save comic info when downloaded
-// TODO (3: Automatically load previously saved comic when app starts)
+import org.json.JSONException
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var requestQueue: RequestQueue
+    private val comicPreferences by lazy { getSharedPreferences("comics", MODE_PRIVATE) }
     lateinit var titleTextView: TextView
     lateinit var descriptionTextView: TextView
     lateinit var numberEditText: EditText
@@ -44,16 +41,34 @@ class MainActivity : AppCompatActivity() {
             downloadComic(numberEditText.text.toString())
         }
 
+        loadSavedComic()
     }
 
     // Fetches comic from web as JSONObject
     private fun downloadComic (comicId: String) {
-        val url = "https://xkcd.com/$comicId/info.0.json"
+        val number = comicId.trim().toIntOrNull()
+        if (number == null || number <= 0) {
+            numberEditText.error = "Enter a positive comic number"
+            return
+        }
+        val url = "https://xkcd.com/$number/info.0.json"
+        // Only the most recently requested comic should update the screen and cache.
+        requestQueue.cancelAll("comic")
         requestQueue.add (
             JsonObjectRequest(url
-                , {showComic(it)}
-                , {}
-            )
+                , {
+                    showComic(it)
+                    saveComic(it)
+                }
+                , { error ->
+                    Log.e("MainActivity", "Failed to download comic $comicId", error)
+                    Toast.makeText(
+                        this,
+                        "Couldn't load comic. Check your connection and comic number.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            ).setTag("comic")
         )
     }
 
@@ -64,10 +79,33 @@ class MainActivity : AppCompatActivity() {
         Picasso.get().load(comicObject.getString("img")).into(comicImageView)
     }
 
-    // Implement this function
+    // Persist the JSON; Picasso manages the comic image's memory and disk cache.
     private fun saveComic(comicObject: JSONObject) {
-
+        comicPreferences.edit().putString("last_comic", comicObject.toString()).apply()
     }
 
+    private fun loadSavedComic() {
+        val savedComic = comicPreferences.getString("last_comic", null) ?: return
+        try {
+            val comicObject = JSONObject(savedComic)
+            // Validate the cached fields before updating the screen.
+            comicObject.getString("title")
+            comicObject.getString("alt")
+            comicObject.getString("img")
+            val number = comicObject.getInt("num")
+            showComic(comicObject)
+            numberEditText.setText(number.toString())
+        } catch (error: JSONException) {
+            Log.w("MainActivity", "Ignoring invalid saved comic", error)
+            comicPreferences.edit().remove("last_comic").apply()
+        }
+    }
+
+    override fun onDestroy() {
+        requestQueue.cancelAll("comic")
+        requestQueue.stop()
+        Picasso.get().cancelRequest(comicImageView)
+        super.onDestroy()
+    }
 
 }
